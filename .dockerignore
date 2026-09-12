@@ -1,0 +1,13 @@
+# O contexto so precisa de api/. Sem isto, o .pio (94MB de artefatos de build do
+# firmware) seria enviado ao daemon a cada build.
+.pio/
+.vscode/
+backup/
+src/
+platformio.ini
+.git/
+.env
+README.md
+LICENSE
+__pycache__/
+*.pyc

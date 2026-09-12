@@ -1,0 +1,9 @@
+.pio/
+.vscode/
+.env
+__pycache__/
+*.pyc
+
+# Dump do firmware original do aparelho: 4MB de binario proprietario do
+# fabricante, especifico desta unidade. Fica local, nao vai para o repo.
+backup/

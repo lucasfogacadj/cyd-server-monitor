@@ -1,0 +1,28 @@
+name: cyd-server-monitor
+
+services:
+  tft-dashboard-api:
+    build: .
+    image: cyd-server-monitor:local
+    container_name: tft-dashboard-api
+    environment:
+      PROM_URL: ${PROM_URL:-http://prometheus:9090}
+      LISTEN_PORT: "9881"
+      # Cache maior que o intervalo de poll da telinha: varias telinhas (ou um
+      # reconnect em loop) nao viram 12 queries no Prometheus a cada refresh.
+      CACHE_TTL: ${CACHE_TTL:-10}
+      SCRAPE_TIMEOUT: ${SCRAPE_TIMEOUT:-8}
+      DISK_MOUNTS: ${DISK_MOUNTS:-/,/mnt/backup}
+      TEMP_CHIP: ${TEMP_CHIP:-platform_coretemp_0}
+    ports:
+      - "${TFT_API_PORT:-9881}:9881"
+    restart: unless-stopped
+    networks:
+      - monitor
+
+networks:
+  monitor:
+    # Rede da stack do Grafana, onde vive o prometheus. Externa de proposito:
+    # este compose nao deve criar nem destruir a rede.
+    name: ${DOCKER_NETWORK:-grafana_default}
+    external: true

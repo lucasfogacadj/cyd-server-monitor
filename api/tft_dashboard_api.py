@@ -9,7 +9,6 @@ O cache existe porque a telinha pode voltar a cada poucos segundos e este host
 ja vive em load ~3 com 2 cores -- sem ele, cada refresh viraria 12 queries.
 """
 import json
-import math
 import os
 import threading
 import time
@@ -38,23 +37,6 @@ TEMP_CHIP = os.environ.get("TEMP_CHIP", "platform_coretemp_0").strip()
 SPARK_POINTS = int(os.environ.get("SPARK_POINTS", "60"))
 SPARK_WINDOW = int(os.environ.get("SPARK_WINDOW", "3600"))
 
-# Expressões PromQL da instalação solar. Valores vazios aparecem como null na
-# CYD, sem inventar uma leitura quando a métrica ainda não foi configurada.
-SOLAR_QUERIES = {
-    "p": os.environ.get("SOLAR_POWER_QUERY", "").strip(),
-    "d": os.environ.get("SOLAR_TODAY_QUERY", "").strip(),
-    "t": os.environ.get("SOLAR_TOTAL_QUERY", "").strip(),
-    "m": os.environ.get("SOLAR_MONTH_QUERY", "").strip(),
-    "y": os.environ.get("SOLAR_YEAR_QUERY", "").strip(),
-    "daylight": os.environ.get("SOLAR_DAYLIGHT_QUERY", "").strip(),
-    "live": os.environ.get("SOLAR_LIVE_QUERY", "").strip(),
-    "g": os.environ.get("SOLAR_GRID_QUERY", "").strip(),
-    "l": os.environ.get("SOLAR_LOAD_QUERY", "").strip(),
-}
-SOLAR_POWER_SCALE = float(os.environ.get("SOLAR_POWER_SCALE", "1"))
-SOLAR_ENERGY_SCALE = float(os.environ.get("SOLAR_ENERGY_SCALE", "1"))
-SOLAR_HISTORY_POINTS = 49
-
 GIB = 1024.0 ** 3
 
 
@@ -81,7 +63,7 @@ def scalar(expr: str, default: float | None = None) -> float | None:
         return default
     # NaN vira None: json.dumps emitiria NaN, que nao e JSON valido e quebra o
     # parser do ESP32.
-    return default if not math.isfinite(value) else value
+    return default if value != value else value
 
 
 def prom_range(expr: str, window: int, points: int) -> list[float]:
@@ -106,7 +88,7 @@ def prom_range(expr: str, window: int, points: int) -> list[float]:
             value = float(raw)
         except (TypeError, ValueError):
             continue
-        if math.isfinite(value):
+        if value == value:
             out.append(value)
     return out
 
@@ -186,67 +168,8 @@ def collect() -> dict:
     }
 
 
-def collect_solar() -> dict:
-    """Le apenas as series solares configuradas; unidades: W e kWh."""
-    values = {
-        key: scalar(expr) if expr else None
-        for key, expr in SOLAR_QUERIES.items()
-    }
-    for key in ("p", "g", "l"):
-        if values[key] is not None:
-            values[key] *= SOLAR_POWER_SCALE
-    for key in ("d", "t", "m", "y"):
-        if values[key] is not None:
-            values[key] *= SOLAR_ENERGY_SCALE
-
-    history = []
-    if SOLAR_QUERIES["p"]:
-        history = solar_history(SOLAR_QUERIES["p"])
-    return {
-        "ok": any(values[k] is not None for k in ("p", "d", "t")),
-        "ts": int(time.time()),
-        "p": round1(values["p"]),
-        "d": round1(values["d"]),
-        "t": round1(values["t"]),
-        "m": round1(values["m"]),
-        "y": round1(values["y"]),
-        "daylight": values["daylight"],
-        "live": values["live"],
-        "g": round1(values["g"]),
-        "l": round1(values["l"]),
-        "h": history,
-    }
-
-
-def solar_history(expr: str) -> list[int | None]:
-    # Fixed half-hour slots: gaps remain null, never shift the daylight curve
-    # or turn missing night telemetry into a measured zero.
-    end = int(time.time()) // 60 * 60
-    start = end - 86400
-    params = {"query": expr, "start": start, "end": end, "step": 1800}
-    url = f"{PROM_URL}/api/v1/query_range?{urllib.parse.urlencode(params)}"
-    out = [None] * SOLAR_HISTORY_POINTS
-    try:
-        with urllib.request.urlopen(url, timeout=SCRAPE_TIMEOUT) as resp:
-            payload = json.load(resp)
-        if payload.get("status") != "success":
-            return out
-        result = payload.get("data", {}).get("result", [])
-        if len(result) != 1:
-            return out
-        for stamp, raw in result[0].get("values", []):
-            index = round((float(stamp) - start) / 1800)
-            value = float(raw) * SOLAR_POWER_SCALE
-            if 0 <= index < len(out) and math.isfinite(value):
-                out[index] = max(0, round(value))
-    except (urllib.error.URLError, OSError, ValueError, TypeError, KeyError):
-        return out
-    return out
-
-
 class Cache:
-    def __init__(self, collector) -> None:
-        self._collector = collector
+    def __init__(self) -> None:
         self._lock = threading.Lock()
         self._payload: dict | None = None
         self._at = 0.0
@@ -257,7 +180,7 @@ class Cache:
             if self._payload is not None and (now - self._at) < CACHE_TTL:
                 return self._payload
             try:
-                payload = self._collector()
+                payload = collect()
             except Exception as exc:  # nunca deixa a telinha sem resposta
                 payload = {"ok": False, "ts": int(time.time()), "err": str(exc)[:120]}
             self._payload = payload
@@ -265,8 +188,7 @@ class Cache:
             return payload
 
 
-CACHE = Cache(collect)
-SOLAR_CACHE = Cache(collect_solar)
+CACHE = Cache()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -277,10 +199,6 @@ class Handler(BaseHTTPRequestHandler):
         path = urllib.parse.urlparse(self.path).path
         if path in ("/", "/status", "/status.json"):
             body = json.dumps(CACHE.get(), separators=(",", ":")).encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-        elif path == "/solar.json":
-            body = json.dumps(SOLAR_CACHE.get(), separators=(",", ":"), allow_nan=False).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
         elif path == "/healthz":

@@ -178,8 +178,49 @@ TFT (HSPI)                 Touch XPT2046 (VSPI)
 LED RGB (ativo em LOW): R=4  G=16  B=17
 ```
 
-O touch não é usado por este firmware — os pinos ficam documentados caso você
-queira alternar telas no toque depois.
+O firmware original de servidor não usa o touch. O firmware solar usa os pinos
+acima e calibra a tela no primeiro início.
+
+## Segunda CYD: geração solar
+
+O ambiente `solar` compila um firmware independente para a segunda placa. A
+primeira continua com `pio run -e cyd`; a nova usa `pio run -e solar` e
+`pio run -e solar -t upload`. Na primeira inicialização, toque os três alvos
+para calibrar a tela. Em seguida, configure WiFi e URL no AP `CYD-Solar`; a URL
+padrão é `http://192.168.3.17:9881/solar.json`.
+
+A tela **Agora** mostra potência instantânea em W, energia do dia, mês, ano e
+acumulada em kWh. A tela **24 horas**
+mostra a potência e permite tocar numa barra para ver o valor. Os botões
+inferiores alternam telas e atualizam a leitura. O serviço expõe os dados em
+`/solar.json` e os mantém em cache por `CACHE_TTL` segundos.
+Segure **ATUALIZAR** por cinco segundos para refazer a calibração do toque.
+As consultas HTTP rodam em uma tarefa separada para manter o toque responsivo
+mesmo se a rede estiver lenta. O histórico mantém 49 pontos separados por
+30 minutos; os horários sem telemetria permanecem vazios. O estado **NOITE**
+é informado pela série de luz solar do SolisCloud, sem inventar potência zero
+quando o datalogger deixa de reportar.
+
+Configure no `.env` as expressões PromQL que retornam **uma única série**:
+
+| variável | unidade esperada | obrigatória |
+|---|---|---|
+| `SOLAR_POWER_QUERY` | W instantâneos | sim |
+| `SOLAR_TODAY_QUERY` | kWh gerados hoje | recomendada |
+| `SOLAR_TOTAL_QUERY` | kWh acumulados | recomendada |
+| `SOLAR_MONTH_QUERY` | kWh do mês | recomendada |
+| `SOLAR_YEAR_QUERY` | kWh do ano | recomendada |
+| `SOLAR_DAYLIGHT_QUERY` | 1 durante o dia, 0 à noite | recomendada |
+| `SOLAR_LIVE_QUERY` | 1 com telemetria atual, 0 sem sinal | recomendada |
+| `SOLAR_GRID_QUERY` | W da rede, sinal conforme a métrica | não |
+| `SOLAR_LOAD_QUERY` | W consumidos | não |
+
+`SOLAR_POWER_SCALE` multiplica as três potências; `SOLAR_ENERGY_SCALE`
+multiplica as quatro energias. Use `1000` quando a origem estiver em kW ou MWh;
+use `0.001` quando estiver em mW ou Wh. Sem expressão ou sem dados, a tela
+mostra `--`, sem confundir ausência de leitura com zero. Após editar o `.env`,
+recrie o serviço com `docker compose up -d --build` e confira
+`http://<host>:9881/solar.json`.
 
 ## Notas de implementação
 
